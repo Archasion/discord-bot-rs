@@ -1,7 +1,7 @@
 use anyhow::Context;
 use async_trait::async_trait;
 use twilight_model::application::command::{Command, CommandType};
-use twilight_model::application::interaction::application_command::CommandData;
+use twilight_model::application::interaction::Interaction;
 use twilight_model::channel::message::component::ActionRow;
 use twilight_model::channel::message::Component;
 use twilight_model::http::interaction::{InteractionResponse, InteractionResponseType};
@@ -12,9 +12,8 @@ use crate::commands::CommandHandler;
 use crate::components::placeholder::PlaceholderComponent;
 use crate::components::ComponentHandler;
 
-pub struct PlaceholderCommand<'a> {
-    #[allow(dead_code)]
-    pub data: &'a CommandData,
+pub(crate) struct PlaceholderCommand<'a> {
+    pub(crate) cmd: &'a Interaction,
 }
 
 #[async_trait]
@@ -30,12 +29,12 @@ impl CommandHandler for PlaceholderCommand<'_> {
         .build())
     }
 
-    async fn exec(&self) -> anyhow::Result<InteractionResponse> {
+    async fn exec(&self, ctx: crate::Context) -> anyhow::Result<()> {
         let button_action_row = Component::ActionRow(ActionRow {
             components: vec![PlaceholderComponent::model()?],
         });
-
-        Ok(InteractionResponse {
+        // Create a response to the interaction.
+        let response = InteractionResponse {
             kind: InteractionResponseType::ChannelMessageWithSource,
             data: Some(
                 InteractionResponseDataBuilder::new()
@@ -43,6 +42,15 @@ impl CommandHandler for PlaceholderCommand<'_> {
                     .components([button_action_row])
                     .build(),
             ),
-        })
+        };
+
+        // Send the response to Discord.
+        ctx.http
+            .interaction(self.cmd.application_id)
+            .create_response(self.cmd.id, &self.cmd.token, &response)
+            .await
+            .context("create interaction response")?;
+
+        Ok(())
     }
 }

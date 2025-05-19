@@ -1,25 +1,26 @@
 use async_trait::async_trait;
-use twilight_model::application::interaction::modal::ModalInteractionData;
+use twilight_model::application::interaction::Interaction;
 use twilight_model::http::interaction::InteractionResponse;
 
 pub(crate) mod placeholder;
 
+pub(crate) async fn handle_modal(
+    ctx: crate::Context,
+    cmd: &Interaction,
+    custom_id: &str,
+) -> anyhow::Result<()> {
+    let handler: Box<dyn ModalHandler> = match custom_id {
+        "placeholder" => Box::new(placeholder::PlaceholderModal { cmd }),
+        _ => anyhow::bail!("unknown modal custom id: {}", custom_id),
+    };
+    handler.exec(ctx).await
+}
+
 /// Trait for implementing modals.
 #[async_trait]
-pub trait ModalHandler: Send {
+pub(crate) trait ModalHandler: Send {
     fn model() -> anyhow::Result<InteractionResponse>
     where
         Self: Sized;
-    async fn exec(&self) -> anyhow::Result<InteractionResponse>;
-}
-
-impl<'a> TryFrom<&'a ModalInteractionData> for Box<dyn ModalHandler + 'a> {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &'a ModalInteractionData) -> Result<Box<dyn ModalHandler + 'a>, Self::Error> {
-        match data.custom_id.as_str() {
-            "placeholder" => Ok(Box::new(placeholder::PlaceholderModal { data })),
-            unknown => anyhow::bail!("unknown modal custom id: {}", unknown),
-        }
-    }
+    async fn exec(&self, ctx: crate::Context) -> anyhow::Result<()>;
 }

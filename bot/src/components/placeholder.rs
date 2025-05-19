@@ -1,17 +1,16 @@
+use anyhow::Context;
 use async_trait::async_trait;
 use builders::component::ButtonBuilder;
-use twilight_model::application::interaction::message_component::MessageComponentInteractionData;
+use twilight_model::application::interaction::Interaction;
 use twilight_model::channel::message::component::ButtonStyle;
 use twilight_model::channel::message::Component;
-use twilight_model::http::interaction::InteractionResponse;
 
 use crate::components::ComponentHandler;
 use crate::modals::placeholder::PlaceholderModal;
 use crate::modals::ModalHandler;
 
-pub struct PlaceholderComponent<'a> {
-    #[allow(dead_code)]
-    pub data: &'a MessageComponentInteractionData,
+pub(crate) struct PlaceholderComponent<'a> {
+    pub(crate) cmd: &'a Interaction,
 }
 
 #[async_trait]
@@ -22,7 +21,14 @@ impl ComponentHandler for PlaceholderComponent<'_> {
             .build()
     }
 
-    async fn exec(&self) -> anyhow::Result<InteractionResponse> {
-        PlaceholderModal::model()
+    async fn exec(&self, ctx: crate::Context) -> anyhow::Result<()> {
+        // Respond to the interaction with a modal.
+        ctx.http
+            .interaction(self.cmd.application_id)
+            .create_response(self.cmd.id, &self.cmd.token, &PlaceholderModal::model()?)
+            .await
+            .context("create interaction response")?;
+
+        Ok(())
     }
 }

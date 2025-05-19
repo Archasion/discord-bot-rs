@@ -5,15 +5,20 @@ mod modals;
 use std::env;
 use std::sync::Arc;
 
-use anyhow::Context;
+use anyhow::Context as _;
 use twilight_cache_inmemory::{DefaultInMemoryCache, ResourceType};
 use twilight_gateway::{Event, EventTypeFlags, Intents, Shard, ShardId, StreamExt as _};
 use twilight_http::Client as HttpClient;
 use twilight_model::application::interaction::InteractionData;
 
-use crate::commands::CommandHandler;
-use crate::components::ComponentHandler;
-use crate::modals::ModalHandler;
+/// The context contains anything that needs to be shared between
+/// the event handlers. In this case, we only need the HTTP client.
+///
+/// You can add more fields to this struct as needed (such as a database).
+#[derive(Clone)]
+pub(crate) struct Context {
+    pub(crate) http: Arc<HttpClient>,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -38,6 +43,9 @@ async fn main() -> anyhow::Result<()> {
         .resource_types(ResourceType::MESSAGE)
         .build();
 
+    // Create the state with the HTTP client
+    let ctx = Context { http: http.clone() };
+
     // Process each event as they come in.
     while let Some(item) = shard
         .next_event(
@@ -55,15 +63,14 @@ async fn main() -> anyhow::Result<()> {
 
         // Update the cache with the event.
         cache.update(&event);
-
-        tokio::spawn(handle_event(event, Arc::clone(&http)));
+        tokio::spawn(handle_event(event, ctx.clone()));
     }
 
     Ok(())
 }
 
-#[tracing::instrument(skip(http))]
-async fn handle_event(event: Event, http: Arc<HttpClient>) -> anyhow::Result<()> {
+#[tracing::instrument(skip(ctx))]
+async fn handle_event(event: Event, ctx: Context) -> anyhow::Result<()> {
     match event {
         Event::Ready(client) => {
             tracing::info!(
@@ -74,7 +81,8 @@ async fn handle_event(event: Event, http: Arc<HttpClient>) -> anyhow::Result<()>
 
             // Publish commands every time the bot starts
             // to ensure they are always up to date.
-            let global_commands = http
+            let global_commands = ctx
+                .http
                 .interaction(client.application.id)
                 .set_global_commands(commands::models()?.as_slice())
                 .await
@@ -86,44 +94,24 @@ async fn handle_event(event: Event, http: Arc<HttpClient>) -> anyhow::Result<()>
             tracing::info!("published {} global commands", global_commands.len());
         },
         Event::InteractionCreate(interaction) => {
-            let response = match &interaction.data {
+            match &interaction.data {
                 Some(InteractionData::ApplicationCommand(command)) => {
-                    let handler: Box<dyn CommandHandler> = command.try_into()?;
-                    handler
-                        .exec()
+                    commands::handle_command(ctx, &interaction, &command.name)
                         .await
-                        .with_context(|| format!("execute command: {}", command.name))
+                        .with_context(|| format!("execute command: {}", command.name))?;
                 },
                 Some(InteractionData::MessageComponent(component)) => {
-                    let handler: Box<dyn ComponentHandler> = component.try_into()?;
-                    handler
-                        .exec()
+                    components::handle_component(ctx, &interaction, &component.custom_id)
                         .await
-                        .with_context(|| format!("execute component: {}", component.custom_id))
+                        .with_context(|| format!("execute component: {}", component.custom_id))?;
                 },
                 Some(InteractionData::ModalSubmit(modal)) => {
-                    let handler: Box<dyn ModalHandler> = modal.try_into()?;
-                    handler
-                        .exec()
+                    modals::handle_modal(ctx, &interaction, &modal.custom_id)
                         .await
-                        .with_context(|| format!("execute modal: {}", modal.custom_id))
+                        .with_context(|| format!("execute modal: {}", modal.custom_id))?;
                 },
                 _ => anyhow::bail!("unsupported interaction type"),
             };
-
-            if let Ok(response) = response {
-                let e = http
-                    .interaction(interaction.application_id)
-                    .create_response(interaction.id, &interaction.token, &response)
-                    .await
-                    .err();
-
-                if let Some(e) = e {
-                    tracing::error!(?e, "error creating response for interaction");
-                }
-            } else {
-                tracing::warn!(?interaction, "no response generated for interaction");
-            }
         },
         _ => {},
     }
